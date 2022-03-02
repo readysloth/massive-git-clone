@@ -20,7 +20,7 @@ async def clone(repo_clone_url):
 async def clone_repos(repo_clone_urls):
     pending_tasks = []
     ev_loop = asyncio.get_event_loop()
-    clone_tasks = [ev_loop.create_task(clone(u)) for u in repo_clone_urls]
+    clone_tasks = (ev_loop.create_task(clone(u)) for u in repo_clone_urls)
     for chunk in split_every(CPU_COUNT, clone_tasks):
         done, pending = await asyncio.wait(chunk)
         pending_tasks += pending
