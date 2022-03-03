@@ -20,7 +20,7 @@ async def clone(repo_clone_url, minimal_depth=False, compress=False):
     cmd += repo_url_and_dir
 
     if compress:
-        cmd += ["; tar cf -", directory, "| xz -9e -c - >", directory + "tar.xz &&", "rm -rf", directory]
+        cmd += ["&& tar cf -", directory, "| xz -9e -c - >", directory + "tar.xz &&", "rm -rf", directory]
 
     proc = await asyncio.create_subprocess_shell(' '.join(cmd),
                                                  stdin=asyncio.subprocess.PIPE,
@@ -34,15 +34,32 @@ async def clone(repo_clone_url, minimal_depth=False, compress=False):
 async def clone_repos(repo_clone_urls, *args, **kwargs):
     pending_tasks = []
     ev_loop = asyncio.get_event_loop()
-    clone_tasks = (ev_loop.create_task(clone(u, *args, **kwargs)) for u in repo_clone_urls)
+    clone_tasks = ((u, ev_loop.create_task(clone(u, *args, **kwargs))) for u in repo_clone_urls)
+    restarted_tasks = []
+
     for chunk in split_every(CPU_COUNT, clone_tasks):
+        for u, t in chunk:
+            setattr(t, "name", u)
+        chunk = [t for _, t in chunk]
         done, pending = await asyncio.wait(chunk, return_when=asyncio.FIRST_COMPLETED)
         pending_tasks += pending
         pending_tasks = [pt for pt in pending_tasks if pt not in done]
+        timeouted_times = 0
+
         while len(pending_tasks) > CPU_COUNT*2:
-            done, pending = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
-            pending_tasks += pending
-            pending_tasks = [pt for pt in pending_tasks if pt not in done]
+            try:
+                done, pending = await asyncio.wait(pending_tasks, timeout=40*60, return_when=asyncio.FIRST_COMPLETED)
+                pending_tasks += pending
+                pending_tasks = [pt for pt in pending_tasks if pt not in done]
+            except asyncio.TimeoutError:
+                timeouted_times += 1
+
+            if timeouted_times == 3:
+                restarted_tasks += [ev_loop.create_task(clone(u.name, *args, **kwargs)) for t in pending_tasks]
+                for t in pending_tasks:
+                    t.cancel()
+                pending_tasks = []
+    await asyncio.wait(restarted_tasks, timeout=6*60*60)
 
 
 def main():
