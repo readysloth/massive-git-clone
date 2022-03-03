@@ -12,8 +12,14 @@ def split_every(n, iterable):
 
 
 async def clone(repo_clone_url):
-    cmd = ["git", "clone", "--recursive", repo_clone_url]
-    proc = await asyncio.create_subprocess_shell(' '.join(cmd))
+    directory = '_'.join(repo_clone_url.split('/')[-2:])
+    cmd = ["git", "clone", "--recursive", repo_clone_url, directory]
+    proc = await asyncio.create_subprocess_shell(' '.join(cmd),
+                                                 stdin=asyncio.subprocess.PIPE,
+                                                 stdout=asyncio.subprocess.PIPE,
+                                                 stderr=asyncio.subprocess.PIPE)
+    print("Cloning {} to {}".format(repo_clone_url, directory))
+    proc.stdin.write(b'\n'*100)
     return await proc.wait()
 
 
