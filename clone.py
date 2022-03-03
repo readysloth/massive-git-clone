@@ -27,7 +27,7 @@ async def clone(repo_clone_url, minimal_depth=False, compress=False):
                                                  stdout=asyncio.subprocess.PIPE,
                                                  stderr=asyncio.subprocess.PIPE)
     print("Cloning {} to {}".format(repo_clone_url, directory))
-    proc.stdin.write(b'\n'*100)
+    proc.stdin.write(b'yes\n'*100)
     return await proc.wait()
 
 
@@ -36,11 +36,13 @@ async def clone_repos(repo_clone_urls, *args, **kwargs):
     ev_loop = asyncio.get_event_loop()
     clone_tasks = (ev_loop.create_task(clone(u, *args, **kwargs)) for u in repo_clone_urls)
     for chunk in split_every(CPU_COUNT, clone_tasks):
-        done, pending = await asyncio.wait(chunk)
+        done, pending = await asyncio.wait(chunk, return_when=asyncio.FIRST_COMPLETED)
         pending_tasks += pending
         pending_tasks = [pt for pt in pending_tasks if pt not in done]
-        if len(pending_tasks) > CPU_COUNT*2:
-            await asyncio.gather(*pending_tasks)
+        while len(pending_tasks) > CPU_COUNT*2:
+            done, pending = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
+            pending_tasks += pending
+            pending_tasks = [pt for pt in pending_tasks if pt not in done]
 
 
 def main():
