@@ -11,9 +11,17 @@ def split_every(n, iterable):
     yield from iter(lambda: list(it.islice(iterable, n)), [])
 
 
-async def clone(repo_clone_url):
+async def clone(repo_clone_url, minimal_depth=False, compress=False):
     directory = '_'.join(repo_clone_url.split('/')[-2:])
-    cmd = ["git", "clone", "--recursive", repo_clone_url, directory]
+    repo_url_and_dir = [repo_clone_url, directory]
+    cmd = ["git", "clone", "--recursive"]
+    if minimal_depth:
+        cmd.append("--depth=1")
+    cmd += repo_url_and_dir
+
+    if compress:
+        cmd += ["; tar cf -", directory, "| xz -9e -c - >", directory + "tar.xz &&", "rm -rf", directory]
+
     proc = await asyncio.create_subprocess_shell(' '.join(cmd),
                                                  stdin=asyncio.subprocess.PIPE,
                                                  stdout=asyncio.subprocess.PIPE,
@@ -23,10 +31,10 @@ async def clone(repo_clone_url):
     return await proc.wait()
 
 
-async def clone_repos(repo_clone_urls):
+async def clone_repos(repo_clone_urls, *args, **kwargs):
     pending_tasks = []
     ev_loop = asyncio.get_event_loop()
-    clone_tasks = (ev_loop.create_task(clone(u)) for u in repo_clone_urls)
+    clone_tasks = (ev_loop.create_task(clone(u, *args, **kwargs)) for u in repo_clone_urls)
     for chunk in split_every(CPU_COUNT, clone_tasks):
         done, pending = await asyncio.wait(chunk)
         pending_tasks += pending
@@ -38,6 +46,8 @@ async def clone_repos(repo_clone_urls):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("repofile", nargs='+', help="file with git repo clone urls")
+    parser.add_argument("-m", "--minimal-depth", action='store_true', help="save repos with depth=1")
+    parser.add_argument("-z", "--compress", action='store_true', help="compress downloaded repos into tar.xz archive")
     args = parser.parse_args()
     for file in args.repofile:
         if file == '-':
@@ -45,7 +55,10 @@ def main():
         else:
             with open(file, 'r') as f:
                 lines = f.readlines()
-        asyncio.run(clone_repos(map(str.strip, lines)))
+        asyncio.run(clone_repos(map(str.strip, lines),
+                                minimal_depth=args.minimal_depth,
+                                compress=args.compress,
+                                ))
 
 if __name__ == "__main__":
     main()
