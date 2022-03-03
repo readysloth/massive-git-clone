@@ -1,3 +1,4 @@
+import os
 import sys
 import asyncio
 import argparse
@@ -11,8 +12,13 @@ def split_every(n, iterable):
     yield from iter(lambda: list(it.islice(iterable, n)), [])
 
 
-async def clone(repo_clone_url, minimal_depth=False, compress=False):
+async def clone(repo_clone_url, minimal_depth=False, compress=False, resume=False):
     directory = '_'.join(repo_clone_url.split('/')[-2:])
+    compressed_repo_name = directory + ".tar.xz"
+
+    if resume and os.path.exists(compressed_repo_name):
+        return
+
     repo_url_and_dir = [repo_clone_url, directory]
     cmd = ["git", "clone", "--recursive"]
     if minimal_depth:
@@ -20,7 +26,7 @@ async def clone(repo_clone_url, minimal_depth=False, compress=False):
     cmd += repo_url_and_dir
 
     if compress:
-        cmd += ["&& tar cf -", directory, "| xz -9e -c - >", directory + "tar.xz &&", "rm -rf", directory]
+        cmd += ["&& tar cf -", directory, "| xz -9e -c - >", compressed_repo_name, "&& rm -rf", directory]
 
     proc = await asyncio.create_subprocess_shell(' '.join(cmd),
                                                  stdin=asyncio.subprocess.PIPE,
@@ -67,6 +73,7 @@ def main():
     parser.add_argument("repofile", nargs='+', help="file with git repo clone urls")
     parser.add_argument("-m", "--minimal-depth", action='store_true', help="save repos with depth=1")
     parser.add_argument("-z", "--compress", action='store_true', help="compress downloaded repos into tar.xz archive")
+    parser.add_argument("-r", "--resume", action='store_true', help="resume interrupted download")
     args = parser.parse_args()
     for file in args.repofile:
         if file == '-':
@@ -77,6 +84,7 @@ def main():
         asyncio.run(clone_repos(map(str.strip, lines),
                                 minimal_depth=args.minimal_depth,
                                 compress=args.compress,
+                                resume=args.resume,
                                 ))
 
 if __name__ == "__main__":
