@@ -65,7 +65,10 @@ async def clone_repos(repo_clone_urls, *args, **kwargs):
                 for t in pending_tasks:
                     t.cancel()
                 pending_tasks = []
-    await asyncio.wait(restarted_tasks, timeout=6*60*60)
+    if restarted_tasks:
+        await asyncio.wait(restarted_tasks, timeout=6*60*60)
+    if pending_tasks:
+        await asyncio.wait(pending_tasks)
 
 
 def main():
@@ -84,8 +87,7 @@ def main():
         asyncio.run(clone_repos(map(str.strip, lines),
                                 minimal_depth=args.minimal_depth,
                                 compress=args.compress,
-                                resume=args.resume,
-                                ))
+                                resume=args.resume))
 
 if __name__ == "__main__":
     main()
