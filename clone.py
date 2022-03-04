@@ -17,7 +17,13 @@ async def clone(repo_clone_url, minimal_depth=False, compress=False, resume=Fals
     compressed_repo_name = directory + ".tar.xz"
 
     if resume and os.path.exists(compressed_repo_name):
-        return
+        test_proc = await asyncio.create_subprocess_shell("xz -t {}".format(compressed_repo_name),
+                                                          stdin=asyncio.subprocess.PIPE,
+                                                          stdout=asyncio.subprocess.PIPE,
+                                                          stderr=asyncio.subprocess.PIPE)
+        await test_proc.wait()
+        if not test_proc.returncode:
+            return
 
     repo_url_and_dir = [repo_clone_url, directory]
     cmd = ["git", "clone", "--recursive"]
