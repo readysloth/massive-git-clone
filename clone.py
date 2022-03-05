@@ -13,7 +13,7 @@ def split_every(n, iterable):
 
 
 async def clone(repo_clone_url, minimal_depth=False, compress=False, resume=False):
-    directory = '_'.join(repo_clone_url.split('/')[-2:])
+    directory = '_'.join(repo_clone_url.split(':')[-1].split('/')[-2:])
     compressed_repo_name = directory + ".tar.xz"
 
     if resume and os.path.exists(compressed_repo_name):
