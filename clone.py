@@ -12,18 +12,44 @@ def split_every(n, iterable):
     yield from iter(lambda: list(it.islice(iterable, n)), [])
 
 
-async def clone(repo_clone_url, minimal_depth=False, compress=False, resume=False):
-    directory = '_'.join(repo_clone_url.split(':')[-1].split('/')[-2:])
-    compressed_repo_name = directory + ".tar.xz"
-
-    if resume and os.path.exists(compressed_repo_name):
-        test_proc = await asyncio.create_subprocess_shell("xz -t {}".format(compressed_repo_name),
+async def archive_exists(path):
+    archive_path = path + ".tar.xz"
+    if os.path.exists(archive_path):
+        test_proc = await asyncio.create_subprocess_shell("xz -t {}".format(archive_path),
                                                           stdin=asyncio.subprocess.PIPE,
                                                           stdout=asyncio.subprocess.PIPE,
                                                           stderr=asyncio.subprocess.PIPE)
         await test_proc.wait()
         if not test_proc.returncode:
-            return
+            return True
+    return False
+
+
+async def compress(queue):
+    active_compressors = []
+    ev_loop = asyncio.get_event_loop()
+
+    while True:
+        path = await queue.get()
+        if not path:
+            return await asyncio.wait(active_compressors)
+        archive_path = path + ".tar.xz"
+        cmd = ["tar cf -", path, "| xz -9e -c - >", archive_path, "&& rm -rf", path]
+
+        proc = await asyncio.create_subprocess_shell(' '.join(cmd),
+                                                     stdin=asyncio.subprocess.PIPE,
+                                                     stdout=asyncio.subprocess.PIPE,
+                                                     stderr=asyncio.subprocess.PIPE)
+        print("Compressing {} to {}".format(path, archive_path))
+        if len(active_compressors) > CPU_COUNT // 2:
+            await asyncio.wait(active_compressors)
+        active_compressors.append(ev_loop.create_task(proc.wait()))
+
+
+async def clone(repo_clone_url, queue, minimal_depth=False, resume=False):
+    directory = '_'.join(repo_clone_url.split(':')[-1].split('/')[-2:])
+    if resume and await archive_exists(directory):
+        return
 
     repo_url_and_dir = [repo_clone_url, directory]
     cmd = ["git", "clone", "--recursive"]
@@ -31,50 +57,45 @@ async def clone(repo_clone_url, minimal_depth=False, compress=False, resume=Fals
         cmd.append("--depth=1")
     cmd += repo_url_and_dir
 
-    if compress:
-        cmd += ["&& tar cf -", directory, "| xz -9e -c - >", compressed_repo_name, "&& rm -rf", directory]
-
+    print("Cloning {} to {}".format(repo_clone_url, directory))
     proc = await asyncio.create_subprocess_shell(' '.join(cmd),
                                                  stdin=asyncio.subprocess.PIPE,
                                                  stdout=asyncio.subprocess.PIPE,
                                                  stderr=asyncio.subprocess.PIPE)
-    print("Cloning {} to {}".format(repo_clone_url, directory))
-    proc.stdin.write(b'yes\n'*100)
-    return await proc.wait()
+    await proc.wait()
+    await queue.put(directory)
 
 
-async def clone_repos(repo_clone_urls, *args, **kwargs):
-    pending_tasks = []
+async def process_repos(repo_clone_urls, queue, *args, **kwargs):
     ev_loop = asyncio.get_event_loop()
-    clone_tasks = ((u, ev_loop.create_task(clone(u, *args, **kwargs))) for u in repo_clone_urls)
-    restarted_tasks = []
-
+    clone_tasks = (ev_loop.create_task(clone(u, queue, *args, **kwargs)) for u in repo_clone_urls)
+    pending_tasks = []
     for chunk in split_every(CPU_COUNT, clone_tasks):
-        for u, t in chunk:
-            setattr(t, "name", u)
-        chunk = [t for _, t in chunk]
-        done, pending = await asyncio.wait(chunk, return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait(chunk+pending_tasks, return_when=asyncio.FIRST_COMPLETED)
         pending_tasks += pending
         pending_tasks = [pt for pt in pending_tasks if pt not in done]
-        timeouted_times = 0
-
         while len(pending_tasks) > CPU_COUNT*2:
-            try:
-                done, pending = await asyncio.wait(pending_tasks, timeout=40*60, return_when=asyncio.FIRST_COMPLETED)
-                pending_tasks += pending
-                pending_tasks = [pt for pt in pending_tasks if pt not in done]
-            except asyncio.TimeoutError:
-                timeouted_times += 1
-
-            if timeouted_times == 3:
-                restarted_tasks += [ev_loop.create_task(clone(u.name, *args, **kwargs)) for t in pending_tasks]
-                for t in pending_tasks:
-                    t.cancel()
-                pending_tasks = []
-    if restarted_tasks:
-        await asyncio.wait(restarted_tasks, timeout=6*60*60)
+            done, pending = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
+            pending_tasks = [pt for pt in pending_tasks if pt not in done]
     if pending_tasks:
         await asyncio.wait(pending_tasks)
+    await queue.put(None)
+
+
+async def async_cloning(repo_clone_urls, *args, do_compress=False, **kwargs):
+    queue = asyncio.Queue()
+
+    async def dummy():
+        while True:
+            if not await queue.get():
+                break
+
+
+    if do_compress:
+        return await asyncio.gather(process_repos(repo_clone_urls, queue, *args, **kwargs),
+                                    compress(queue))
+    return await asyncio.gather(process_repos(repo_clone_urls, queue, *args, **kwargs),
+                                dummy(queue))
 
 
 def main():
@@ -90,10 +111,10 @@ def main():
         else:
             with open(file, 'r') as f:
                 lines = f.readlines()
-        asyncio.run(clone_repos(map(str.strip, lines),
-                                minimal_depth=args.minimal_depth,
-                                compress=args.compress,
-                                resume=args.resume))
+        asyncio.run(async_cloning(map(str.strip, lines),
+                                  minimal_depth=args.minimal_depth,
+                                  do_compress=args.compress,
+                                  resume=args.resume))
 
 if __name__ == "__main__":
     main()
