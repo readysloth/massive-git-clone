@@ -56,7 +56,7 @@ async def unpack(files, dir_queue):
             continue
 
         cmd = "tar xf {}".format(file)
-        directory = file.removesuffix('.tar.xz')
+        directory = os.path.basename(file.removesuffix('.tar.xz'))
 
         try:
             unpack_proc = await asyncio.create_subprocess_shell(cmd)
@@ -89,7 +89,7 @@ async def compress(compress_queue, output):
         archive_path = path + ".tar.xz"
         archive_name = os.path.basename(archive_path)
         archive_path = os.path.join(output, archive_name) if output else archive_path
-        cmd = ["tar cf -", path, "| xz -9e -c - >", archive_path, "&& rm -rf", path]
+        cmd = ["tar cf -", os.path.basename(path), "| xz -9e -c - >", archive_path, "&& rm -rf", path]
 
         proc = await asyncio.create_subprocess_shell(' '.join(cmd),
                                                      stdin=asyncio.subprocess.PIPE,
