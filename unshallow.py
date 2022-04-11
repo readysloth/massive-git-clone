@@ -76,7 +76,7 @@ async def unpack(files, dir_queue):
     await dir_queue.put(None)
 
 
-async def compress(compress_queue):
+async def compress(compress_queue, output):
     active_procs = []
     ev_loop = asyncio.get_event_loop()
 
@@ -87,6 +87,8 @@ async def compress(compress_queue):
                 await asyncio.wait(active_procs)
             return
         archive_path = path + ".tar.xz"
+        archive_name = os.path.basename(archive_path)
+        archive_path = os.path.join(output, archive_name) if output else archive_path
         cmd = ["tar cf -", path, "| xz -9e -c - >", archive_path, "&& rm -rf", path]
 
         proc = await asyncio.create_subprocess_shell(' '.join(cmd),
@@ -100,11 +102,13 @@ async def compress(compress_queue):
 
 
 
-async def massive_unshallow(files, do_compress=False):
+async def massive_unshallow(files, do_compress=False, output=''):
     dir_queue, compress_queue = asyncio.Queue(), asyncio.Queue()
     coros = [unpack(files, dir_queue), git_unshallow(dir_queue, compress_queue)]
     if do_compress:
-        coros.append(compress(compress_queue))
+        coros.append(compress(compress_queue, output))
+    if output:
+        os.makedirs(output, exist_ok=True)
     await asyncio.gather(*coros)
 
 
@@ -112,6 +116,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("repofile", nargs='+', help="file with git repo clone urls")
     parser.add_argument("-z", "--compress", action='store_true', help="compress unshallowed repos back into tar.xz archive")
+    parser.add_argument("-o", "--output", help="output folder")
     args = parser.parse_args()
     for file in args.repofile:
         if file == '-':
@@ -120,7 +125,8 @@ def main():
             with open(file, 'r') as f:
                 lines = f.readlines()
         asyncio.run(massive_unshallow(map(str.strip, lines),
-                                      do_compress=args.compress))
+                                      do_compress=args.compress,
+                                      output=args.output))
 
 if __name__ == "__main__":
     main()
